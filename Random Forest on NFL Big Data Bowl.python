@@ -1,0 +1,419 @@
+## Special thanks to my teammates: Peijing Wei, Yifan Zhou 
+
+## We participated 2019 NFL Big Data Bowl data competition to develop a model to predict how many yards a team will gain on given rushing plays as they happen. 
+## Link for Competition: https://www.kaggle.com/c/nfl-big-data-bowl-2020/overview
+## dataset is provided on the website.
+## methods: Random Forest
+
+## below codes are runned in Kaggle environment.
+
+import numpy as np 
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import tqdm
+import matplotlib.pyplot as plt
+import os
+import datetime
+from string import punctuation
+import re
+from sklearn import preprocessing
+
+import os
+for dirname, _, filenames in os.walk('/kaggle/input'):
+    for filename in filenames:
+        print(os.path.join(dirname, filename))
+        
+# Training data is in the competition dataset as usual
+df = pd.read_csv('/kaggle/input/nfl-big-data-bowl-2020/train.csv', low_memory=False)
+
+unused_columns = ["GameId",
+ "PlayId",
+ "Team",
+ "PlayerCollegeName",
+ "PlayerBirthDate",
+ "NflIdRusher",
+ "DisplayName",
+ "NflId",
+ 'GameClock',
+ 'JerseyNumber',
+ 'FieldPosition',
+ 'OffensePersonnel',
+ 'DefendersInTheBox',
+ 'DefensePersonnel',
+ 'PlayDirection',
+ 'TimeHandoff',
+ 'TimeSnap',
+ 'PlayerBirthDate',
+ 'PlayerCollegeName',
+ 'Position',
+ 'HomeTeamAbbr',
+ 'VisitorTeamAbbr',
+ 'TimeLeft1',
+ 'PlayerBirthYear',
+ 'Stadium',
+ 'Location',
+ 'PlayerBirthYear',
+ 'GameWeather',
+ 'PossessionTeam',
+ 'Dir',
+'IsRusherTeam',
+ 'X',
+ 'HomeTeam',
+ 'WindDirection',
+ 'OffenseFormation']
+ 
+df.columns
+
+
+### Create data clean function
+
+def cleantrain(train_data):
+    #weather data
+    train_data['WindSpeed'] = train_data['WindSpeed'].apply(lambda x: str(x).lower().replace('mph', '').strip() if not pd.isna(x) else x)
+    #remove '-' and gust up to
+    train_data['WindSpeed'] = train_data['WindSpeed'].apply(lambda x: (int(x.split('-')[0])+int(x.split('-')[1]))/2 if not pd.isna(x) and '-' in x else x)
+    train_data['WindSpeed'] = train_data['WindSpeed'].apply(lambda x: (int(x.split()[0])+int(x.split()[-1]))/2 if not pd.isna(x) and type(x)!=float and 'gusts up to' in x else x)
+    train_data['WindSpeed'] = train_data['WindSpeed'].apply(pd.to_numeric, errors='coerce')
+    
+    #player specific info cleanup
+    train_data['ToLeft'] = train_data.PlayDirection == "left"
+    train_data['IsBallCarrier'] = train_data.NflId == train_data.NflIdRusher
+    
+    train_data['x_op'] = train_data['X']
+    train_data.loc[train_data.ToLeft, 'x_op'] = 120 - train_data.loc[train_data.ToLeft, 'X']
+    
+    #### Direction (relativce to the play direction)
+    # 0 degrees: the player is moving to his left
+    # 90 degrees: the player is moving straight ahead, towards opponent end zone
+    # 180 degrees: the player is moving completely to his right
+    # 270 degrees: the player is moving backwards
+    
+    train_data['Dir_adj']=train_data['Dir']
+    train_data.loc[train_data.ToLeft, 'Dir_adj'] = 360 - train_data.loc[train_data.ToLeft, 'Dir']
+    
+    train_data['PlayerHeight'] = train_data['PlayerHeight'].apply(lambda x: 12*int(str(x).split('-')[0])+int(str(x).split('-')[1]) if not pd.isna(x) else x)
+    train_data['PlayerBirthYear'] = train_data['PlayerBirthDate'].apply(lambda x: str(x).split('/')[-1] if not pd.isna(x) else x)
+    train_data['PlayerAge'] = train_data.apply(lambda row: (float(row['Season'])-float(row['PlayerBirthYear'])), axis=1)
+
+    
+    #general information cleanup
+    #Stadium Type
+    def clean_StadiumType(txt):
+        if pd.isna(txt):
+            return np.nan
+        txt = txt.lower()
+        txt = ''.join([c for c in txt if c not in punctuation])
+        txt = re.sub(' +', ' ', txt)
+        txt = txt.strip()
+        txt = txt.replace('outside', 'outdoor')
+        txt = txt.replace('outdor', 'outdoor')
+        txt = txt.replace('outddors', 'outdoor')
+        txt = txt.replace('outdoors', 'outdoor')
+        txt = txt.replace('oudoor', 'outdoor')
+        txt = txt.replace('indoors', 'indoor')
+        txt = txt.replace('ourdoor', 'outdoor')
+        txt = txt.replace('retractable', 'rtr.')
+        return txt
+    train_data['StadiumType'] = train_data['StadiumType'].apply(clean_StadiumType)
+    
+    def reassign_StadiumType(txt):
+        if pd.isna(txt):
+            return np.nan
+        if 'outdoor' in txt or 'open' in txt:
+            return 1
+        if 'indoor' in txt or 'closed' in txt:
+            return 0
+        else:
+            return np.nan
+    train_data['StadiumType'] = train_data['StadiumType'].apply(reassign_StadiumType)
+    
+    #Turf
+    Turf = {'Field Turf':'Artificial', 'A-Turf Titan':'Artificial', 'Grass':'Natural', 'UBU Sports Speed S5-M':'Artificial', 
+        'Artificial':'Artificial', 'DD GrassMaster':'Artificial', 'Natural Grass':'Natural', 
+        'UBU Speed Series-S5-M':'Artificial', 'FieldTurf':'Artificial', 'FieldTurf 360':'Artificial', 'Natural grass':'Natural', 'grass':'Natural', 
+        'Natural':'Natural', 'Artifical':'Artificial', 'FieldTurf360':'Artificial', 'Naturall Grass':'Natural', 'Field turf':'Artificial', 
+        'SISGrass':'Artificial', 'Twenty-Four/Seven Turf':'Artificial', 'natural grass':'Natural'} 
+
+    train_data['Turf'] = train_data['Turf'].map(Turf)
+    train_data['Turf'] = train_data['Turf'] == 'Natural'
+    
+    #HomeTeam
+    train_data['HomeTeam'] = train_data['Team'].apply(lambda x: x.strip()=='home')
+    
+    #PossessionTeam, HomeTeamAbbr, VisitorTeamAbbr
+    diff_abbr = {'ARI': 'ARZ', 'BAL': 'BLT', 'CLE': 'CLV', 'HOU': 'HST'}
+    for a in train_data['PossessionTeam'].unique():
+        diff_abbr[a] = a
+
+    train_data['PossessionTeam'] = train_data['PossessionTeam'].map(diff_abbr)
+    train_data['HomeTeamAbbr'] = train_data['HomeTeamAbbr'].map(diff_abbr)
+    train_data['VisitorTeamAbbr'] = train_data['VisitorTeamAbbr'].map(diff_abbr)
+    
+    train_data['HomePossesion'] = train_data['PossessionTeam'] == train_data['HomeTeamAbbr']
+    train_data['PossessionTeamField'] = train_data['FieldPosition'] == train_data['PossessionTeam']
+    train_data['HomeField'] = train_data['FieldPosition'] == train_data['HomeTeamAbbr']
+    
+    #Team Formation
+    #Deffense
+    DL,LB,DB,OL=[],[],[],[]
+    for c in train_data['DefensePersonnel']:
+        if pd.isna(c):
+            DL.append(np.nan)
+            LB.append(np.nan)
+            DB.append(np.nan)
+            OL.append(np.nan)
+        else:
+            features=str(c).split(", ")
+            if len(features)==3:
+                DL.append(int(features[0][0]))
+                LB.append(int(features[1][0]))
+                DB.append(int(features[2][0]))
+                OL.append(0)
+            else:
+                DL.append(int(features[0][0]))
+                LB.append(int(features[1][0]))
+                DB.append(int(features[2][0]))
+                OL.append(int(features[3][0]))
+
+    train_data["DL"],train_data["LB"],train_data["DB"],train_data["OL"]=DL,LB,DB,OL
+    
+    #Offense
+    offense_dict={'ORB':[],'OTE':[],'OWR':[],'OQB':[],'OOL':[]}
+    offense_group=['RB','TE','WR','QB','OL']
+    for c in train_data['OffensePersonnel']:
+        if pd.isna(c):
+            offense_dict['ORB'].append(np.nan)
+            offense_dict['OTE'].append(np.nan)
+            offense_dict['OWR'].append(np.nan)
+            offense_dict['OOL'].append(np.nan)
+            offense_dict['OQB'].append(np.nan)
+        else:
+            features=str(c).split(",")
+            for line in features:
+                if 'RB' in line:
+                    offense_dict['ORB'].append(line.strip()[0])
+                if 'TE' in line:
+                    offense_dict['OTE'].append(line.strip()[0])
+                if 'WR' in line:
+                    offense_dict['OWR'].append(line.strip()[0])
+                if 'OL' in line:
+                    offense_dict['OOL'].append(line.strip()[0])
+                if 'QB' in line:
+                    offense_dict['OQB'].append(line.strip()[0])
+            sm_features=re.split(',| ',str(c))
+            for i in offense_group:
+                if i not in sm_features:
+                    offense_dict['O'+i].append(np.nan)
+    
+    train_data["ORB"],train_data["OTE"],train_data["OWR"],train_data["OOL"],train_data["OQB"]=offense_dict['ORB'],offense_dict['OTE'],offense_dict['OWR'],offense_dict['OOL'],offense_dict['OQB']
+    
+    #Time cleanup
+    train_data['TimeLeft1'] = train_data['GameClock'].apply(lambda x: x.split(':') if not pd.isna(x) else x)
+    
+    def clean_GameClock(txt):
+        if not pd.isna(txt):
+            txt = str(txt).split(':')
+            txt = int(txt[0]) + int(txt[1])/60 + int(txt[2])/3600
+        return txt
+    
+    train_data['TimeLeft'] = train_data['GameClock'].apply(clean_GameClock)
+    train_data['TimeHandoff'] = train_data['TimeHandoff'].apply(lambda x: datetime.datetime.strptime(str(x), "%Y-%m-%dT%H:%M:%S.%fZ") if not pd.isna(x) else x)
+    train_data['TimeSnap'] = train_data['TimeSnap'].apply(lambda x: datetime.datetime.strptime(str(x), "%Y-%m-%dT%H:%M:%S.%fZ") if not pd.isna(x) else x)
+    
+    train_data['TimeDelta'] = train_data.apply(lambda row: (row['TimeHandoff'] - row['TimeSnap']).total_seconds(), axis=1)
+
+    
+    #Reorder rows
+    train_data['IsRusherTeam']=train_data['HomePossesion'] == train_data['HomeTeam']
+    train = train_data.sort_values(by=['PlayId', 'IsRusherTeam', 'IsBallCarrier']).reset_index(drop = True)
+
+    #Remove unused columns
+    df_train=train.drop(unused_columns, axis=1)
+    
+    return df_train
+    
+### Split features and target: train_y & train_x
+def train_y(df_train):
+    y = np.array([df_train["Yards"][i] for i in range(0,len(df_train),22)])
+    return y
+def train_x(df_train):
+    x = df_train.drop('Yards', axis=1)
+    return x
+df=cleantrain(df)
+df_y=train_y(df)
+df_x=train_x(df)
+
+
+### Create Rusher Dataset
+#create rusher function
+def create_rusher(df_x):
+    rusher_columns=['RusherX_op','RusherY','RusherS','RusherA','RusherD','RusherOri','RusherH','RusherW','RusherDir','RusherAge']
+    df_rusher=df_x[(df_x['IsBallCarrier'] == 1)][['x_op','Y','S','A','Dis','Orientation','PlayerHeight','PlayerWeight','Dir_adj','PlayerAge']]
+    df_rusher.columns=rusher_columns
+    df_rusher=df_rusher.reset_index(drop=True)
+    return df_rusher
+def no_rusher_data(df_x):
+    ##drop rusher data from the original dataset
+    # Get names of indexes for which column Age has value 30
+    indexNames = df_x[df_x['IsBallCarrier'] == 1].index
+    # Delete these row indexes from dataFrame
+    df_x.drop(indexNames , inplace=True)
+    df_x=df_x.drop('IsBallCarrier',axis=1)
+    df_x = df_x.reset_index(drop=True)
+    
+    return df_x
+df_rusher=create_rusher(df_x)
+df_x=no_rusher_data(df_x)
+#get all the columns for feature selection
+pc=[]
+for c in df_x.columns:
+    if len(set(df_x[c][:21]))!=1:
+        pc.append(c)
+            
+play_specific = []
+people_specific = []
+for c in df_x.columns:
+    if c not in pc:
+        play_specific.append(c)
+    else:
+        for i in range(21):
+            people_specific.append(c+str(i))
+all_columns=play_specific+people_specific
+
+
+### Transpose the train dataset
+def transposetrain(df_train):
+            
+    allcolumns = []
+    for c in df_train.columns:
+        if c not in pc:
+            allcolumns.append(c)
+        else:
+            for i in range(21):
+                allcolumns.append(c+str(i))
+                
+    traindata=np.zeros((len(df_train)//21,len(allcolumns)))
+    
+    for i in range(0,len(df_train),21):
+        count=0
+        for c in allcolumns:
+            if c in df_train.columns:
+                traindata[i//21][count] = df_train[c][i]
+                count+=1
+        for c in pc:
+            for j in range(21):
+                traindata[i//21][count] = df_train[c][i+j]
+                count+=1 
+    return traindata
+df_x=transposetrain(df_x)
+
+
+### Change the output y
+#get y_train in the outcome format
+y_train = np.zeros((df_x.shape[0], 199))
+for idx, target in enumerate(df['Yards'][::22]):
+    y_train[idx][99 + target] = 1
+
+
+
+### Feature Selection
+from sklearn.feature_selection import SelectKBest
+from sklearn.feature_selection import f_classif
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+# get the most important features
+X=pd.DataFrame(df_x,columns=all_columns) #independent columns
+X=pd.concat([X, df_rusher], axis=1, sort=False) #concat features with rusher dataset
+X.fillna(-999,inplace=True)
+y=pd.DataFrame(df_y)    #target column i.e price range
+#apply SelectKBest class to extract top 100 best features
+bestfeatures = SelectKBest(score_func=f_classif, k=150)
+fit = bestfeatures.fit(X,y)
+dfscores = pd.DataFrame(fit.scores_)
+dfpvalue = pd.DataFrame(fit.pvalues_)
+dfcolumns = pd.DataFrame(X.columns)
+count=len(dfpvalue.loc[(dfpvalue[0] <= 0.05)]) #select significant features
+#concat two dataframes for better visualization 
+featureScores = pd.concat([dfcolumns,dfscores,dfpvalue],axis=1)
+featureScores.columns = ['Specs','Score','P-value']  #naming the dataframe columns
+print(featureScores.nsmallest(count,'P-value'))  #print best features
+
+selected_columns=list(featureScores.nsmallest(count,'P-value')['Specs'])
+df_x=X[selected_columns]
+x_train=df_x.to_numpy()
+x_train[:5]
+
+### Calculate CRPS score
+# Calculate CRPS score
+def crps_score(y_prediction, y_valid, shape=X.shape[0]):
+    y_true = np.clip(np.cumsum(y_valid, axis=1), 0, 1)
+    y_pred = np.clip(np.cumsum(y_prediction, axis=1), 0, 1)
+    val_s = ((y_true - y_pred) ** 2).sum(axis=1).sum(axis=0) / (199 * shape)
+    crps = np.round(val_s, 6)
+    
+    return crps
+    
+### Model Selection
+Random Forest (selected parameters using Random Hyperparameter Grid)
+from sklearn.model_selection import train_test_split
+#train, test split
+X_train, X_test, Y_train, Y_test = train_test_split(x_train, y_train, test_size=0.33, random_state=42)
+#RF fit
+model = RandomForestRegressor(bootstrap=True, 
+                              max_features='sqrt', 
+                              min_samples_leaf=4, 
+                              min_samples_split=2, 
+                              n_estimators=50, 
+                              n_jobs=-1, 
+                              random_state=42)
+model.fit(X_train, Y_train)
+    
+y_pred = model.predict(X_test)
+y_valid = Y_test
+crps_rf = crps_score(y_pred, y_valid, shape=X_test.shape[0])
+crps_rf
+
+
+### Actual Submission
+from kaggle.competitions import nflrush
+env = nflrush.make_env()
+iter_test = env.iter_test()
+for (test_df, sample_prediction_df) in iter_test:
+    #clean the test dataset
+    df_x=cleantrain(test_df)
+    
+    #create rusher dataset
+    df_rusher=create_rusher(df_x)
+    
+    #create non_rusher dataset
+    df_x=no_rusher_data(df_x)
+
+    #transpose the dataset
+    df_x=transposetrain(df_x)
+
+
+    #standardize feature values
+    #scaler = preprocessing.StandardScaler()
+    
+    #x_train = scaler.fit_transform(df_x)
+    
+    #replace null values with global constants
+    #x_train[np.isnan(x_train)]=-999
+
+    #concate non_rusher and rusher datasets
+    X=pd.DataFrame(df_x, columns=all_columns) #independent columns
+    X=pd.concat([X, df_rusher], axis=1, sort=False) #concat features with rusher dataset
+    X.fillna(-999,inplace=True)
+    
+    #only leave the columns that are signicantly correlated with the target
+    df_x=X[selected_columns]
+    x_train=df_x.to_numpy()
+
+    #predict the output
+    y_pred = model.predict(x_train)
+    y_pred_cum = np.clip(np.cumsum(y_pred, axis=1), 0, 1)
+
+    preds_df = pd.DataFrame(data=y_pred_cum, columns=sample_prediction_df.columns)
+    env.predict(preds_df)
+    
+
+env.write_submission_file()
