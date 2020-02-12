@@ -1,3 +1,9 @@
+## please see find our analysis on Medium
+## https://towardsdatascience.com/whats-the-secret-of-ncaa-basketball-champions-9cc8e649288
+## We collected the data from https://www.sports-reference.com/cbb/schools/
+## methods: MNLogit
+
+
 # import libraries
 import pandas as pd
 import numpy as np
