@@ -1,0 +1,219 @@
+## Special thanks to my teammates: Jiawen Li, Yanqing Shen (available via LinkedIn)
+## please see find our analysis on Medium
+## https://towardsdatascience.com/whats-the-secret-of-ncaa-basketball-champions-9cc8e649288
+## We collected the data from https://www.sports-reference.com/cbb/schools/
+
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+
+from sklearn import neighbors, datasets, preprocessing
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+import pandas as pd
+import seaborn as sns
+import numpy as np ## matrix is a subset of ndarray
+
+## load data
+data=pd.read_csv("/Users/Crystal/Downloads/NCAA10.csv")
+
+def clean(data):
+    index=list()
+    for i in range(data.shape[0]):
+        if data.iloc[i,-1]==0 or data.iloc[i,-2]==0 or pd.isnull(data.iloc[i,-2])==True or pd.isnull(data.iloc[i,-1])==True:
+            index.append(i)
+    return data.drop(data.index[index])
+
+clean(data).isnull().sum()
+data_clean=clean(data).fillna(0)
+clean(data_clean).isnull().sum()
+
+## heatmap
+plt.figure(figsize=(20,20))
+fig=sns.heatmap(data_clean.corr(),annot=True,cmap='RdYlGn',square=True).get_figure()
+fig.savefig("/Users/Crystal/Downloads/heatmap.png")
+
+## corr of win% 
+data_clean.corr()['Win%'].sort_values(kind="quicksort", ascending=False)
+
+corr_mat = data_clean.corr()
+## most PTS comes from FT
+corr_mat['PTS'].sort_values(kind="quicksort", ascending=False) 
+## FT most correlated with TOV
+corr_mat['FT'].sort_values(kind="quicksort", ascending=False)
+## 2P most correlated with TRB
+corr_mat['2P'].sort_values(kind="quicksort", ascending=False)
+## 3P most correlated with AST
+corr_mat['3P'].sort_values(kind="quicksort", ascending=False)
+
+### predict the prercentage of win
+from sklearn.linear_model import LinearRegression
+x=data_clean.iloc[:,11:-2]
+weight=data_clean['Engagement']
+y=data_clean['Win%']
+X_train,X_test,y_train,y_test=train_test_split(pd.DataFrame([data_clean.iloc[:,n]*weight for n in range(11,35)]).T,y,test_size=0.2)
+
+regressor = LinearRegression()  
+regressor.fit(X_train, y_train)
+y_pred = regressor.predict(X_test)
+df = pd.DataFrame({'Actual': y_test, 'Predicted': y_pred})
+regression_results(y_test, y_pred)
+
+import sklearn.metrics as metrics
+def regression_results(y_true, y_pred):
+
+    # Regression metrics
+    explained_variance=metrics.explained_variance_score(y_true, y_pred)
+    mean_absolute_error=metrics.mean_absolute_error(y_true, y_pred) 
+    mse=metrics.mean_squared_error(y_true, y_pred) 
+    mean_squared_log_error=metrics.mean_squared_log_error(y_true, y_pred)
+    median_absolute_error=metrics.median_absolute_error(y_true, y_pred)
+    r2=metrics.r2_score(y_true, y_pred)
+
+    print('explained_variance: ', round(explained_variance,4))    
+    print('mean_squared_log_error: ', round(mean_squared_log_error,4))
+    print('r2: ', round(r2,4))
+    print('MAE: ', round(mean_absolute_error,4))
+    print('MSE: ', round(mse,4))
+    print('RMSE: ', round(np.sqrt(mse),4))
+
+from sklearn import linear_model
+ll=linear_model.Lasso(alpha=0.5)
+ll.fit(X_train, y_train)
+y_pred = ll.predict(X_test)
+df = pd.DataFrame({'Actual': y_test, 'Predicted': y_pred})
+regression_results(y_test, y_pred)
+
+rf= RandomForestRegressor(n_estimators=50, random_state=0)
+rf.fit(X_train, y_train)
+y_pred = rf.predict(X_test)
+df = pd.DataFrame({'Actual': y_test, 'Predicted': y_pred})
+regression_results(y_test, y_pred)
+
+from sklearn.svm import SVR 
+svr = SVR(kernel='rbf')
+svr.fit(X_train, y_train)
+y_pred = svr.predict(X_test)
+df = pd.DataFrame({'Actual': y_test, 'Predicted': y_pred})
+regression_results(y_test, y_pred)
+
+## each team's win% factor
+plt.figure(figsize=(20,20))
+fig=sns.heatmap(data_clean.loc[data_clean.Team=='DUKE'].corr(),annot=True,cmap='RdYlGn',square=True).get_figure()
+fig.savefig("/Users/Crystal/Downloads/DUKE.png")
+corr_mat_DUKE = data_clean.loc[data_clean.Team=='DUKE'].corr()
+abs(corr_mat_DUKE['Win%']).sort_values(kind="quicksort", ascending=False)
+corr_mat_ucla= data_clean.loc[data_clean.Team=='UCLA BRUINS'].corr()
+abs(corr_mat_ucla['Win%']).sort_values(kind="quicksort", ascending=False)
+corr_mat_k= data_clean.loc[data_clean.Team=='Kenturky wildcats'].corr()
+abs(corr_mat_k['Win%']).sort_values(kind="quicksort", ascending=False)
+
+##pca
+from sklearn.decomposition import PCA
+from sklearn.metrics import silhouette_score
+
+pca = PCA()
+pca.fit(data_clean.iloc[:,9:])
+#Plotting the Cumulative Summation of the Explained Variance
+import matplotlib.pyplot as plt
+plt.figure()
+plt.plot(np.cumsum(pca.explained_variance_ratio_))
+plt.xlabel('Number of Components')
+plt.ylabel('Variance (%)') #for each component
+plt.title('Explained Variance')
+plt.show()
+
+
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1) 
+ax.set_xlabel('Principal Component 1', fontsize = 15)
+ax.set_ylabel('Principal Component 2', fontsize = 15)
+ax.set_title('2 component PCA', fontsize = 20)
+
+X_new = pca.transform(data_clean.iloc[:,9:])
+plt.scatter(X_new[:, 0], X_new[:, 1],marker='o')
+plt.xlabel('component 1')
+plt.ylabel('component 2')
+plt.show()
+
+## explore whether pc1,2 well seperate bt pos: not
+fig = plt.figure(figsize=(10,10))
+ax = fig.add_subplot(1,1,1) 
+ax.set_xlabel('Principal Component 1', fontsize = 15)
+ax.set_ylabel('Principal Component 2', fontsize = 15)
+ax.set_title('2 component PCA', fontsize = 20)
+principalDf=pd.DataFrame(data = X_new[:,:2]
+             , columns = ['principal component 1', 'principal component 2'])
+finalDf = pd.concat([principalDf, data_clean.reset_index(drop=True)[['Pos']]], axis = 1)
+targets = ['C', 'F', 'G']
+colors = ['r', 'g', 'b']
+for target, color in zip(targets,colors):
+    indicesToKeep = finalDf['Pos'] == target
+    ax.scatter(finalDf.loc[indicesToKeep, 'principal component 1']
+               , finalDf.loc[indicesToKeep, 'principal component 2']
+               , c = color
+               , s = 10)
+ax.legend(targets)
+ax.grid()
+plt.savefig("/Users/Crystal/Downloads/pca.png")
+
+## for pc1,pc2, pc3 which combination of variable 
+## pca.components_: (n_components, n_features)
+pc1=pd.concat([pd.DataFrame(pca.components_).iloc[0,:],pd.DataFrame(data.columns[9:])],axis = 1)
+pc1.columns=['pc1 weight','index']
+pc1.sort_values(by='pc1 weight',ascending=False) #principle1
+pc2=pd.concat([pd.DataFrame(pca.components_).iloc[1,:],pd.DataFrame(data.columns[9:])],axis = 1)
+pc2.columns=['pc2 weight','index']
+pc2.sort_values(by='pc2 weight',ascending=False) #principle2
+
+
+
+## random forest for each position
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import confusion_matrix
+import random
+rf= RandomForestRegressor(n_estimators=50, random_state=0)
+random.seed(1)
+X_train,X_test,y_train,y_test=train_test_split(data_clean.iloc[:,9:35],data_clean['Pos'],test_size=0.2)
+rf.fit(X_train, y_train.astype('category').cat.codes)
+y_pred=[int(round(i,0)) for i in rf.predict(X_test)]
+confusion_matrix(y_test.astype('category').cat.codes, y_pred)
+print('Mean Absolute Error (MAE):', metrics.mean_absolute_error(y_test.astype('category').cat.codes, y_pred))
+print('Mean Squared Error (MSE):', metrics.mean_squared_error(y_test.astype('category').cat.codes, y_pred))
+print('Root Mean Squared Error (RMSE):', np.sqrt(metrics.mean_squared_error(y_test.astype('category').cat.codes, y_pred)))
+print('Accuracy:',metrics.accuracy_score(y_test.astype('category').cat.codes, y_pred))
+
+importances = list(rf.feature_importances_)
+feat_importances = pd.Series(rf.feature_importances_, index=data_clean.iloc[:,9:35].columns)
+feat_importances.sort_values().plot(kind='barh')
+
+## knn
+from sklearn.preprocessing import StandardScaler
+scaler = StandardScaler()
+scaler.fit(X_train)
+X_train = scaler.transform(X_train)
+X_test = scaler.transform(X_test)
+from sklearn.neighbors import KNeighborsClassifier
+knn = KNeighborsClassifier(n_neighbors=5)
+knn.fit(X_train, y_train)
+y_pred = knn.predict(X_test)
+confusion_matrix(y_test, y_pred)
+print('Accuracy:',metrics.accuracy_score(y_test, y_pred))
+
+##logistic regression
+from sklearn.linear_model import LogisticRegression
+lr = LogisticRegression()
+random.seed(1)
+X_train,X_test,y_train,y_test=train_test_split(data_clean.iloc[:,9:35],data_clean['Pos'],test_size=0.2)
+lr.fit(X_train,y_train)
+y_pred = lr.predict(X_test)
+confusion_matrix(y_test, y_pred)
+print('Accuracy:',metrics.accuracy_score(y_test, y_pred))
+## for each class feature importance
+pd.DataFrame(abs(lr.coef_), columns=data_clean.iloc[:,9:35].columns, index=lr.classes_).T
+
+
+
+
+
