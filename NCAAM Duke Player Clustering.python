@@ -1,0 +1,157 @@
+## please see find our analysis on Medium
+## https://towardsdatascience.com/whats-the-secret-of-ncaa-basketball-champions-9cc8e649288
+## We collected the data from https://www.sports-reference.com/cbb/schools/
+## methods: k-means and PCA
+
+# import libraries
+import pandas as pd
+import numpy as np
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import MinMaxScaler
+import seaborn as sns
+import matplotlib.pyplot as plt
+duke = pd.read_csv("dukenew.csv")
+
+# understanding the dataset
+print(duke.info())
+duke.var()
+
+#dataset cleaning 
+duke = duke.drop(columns=['city,HOMETOWN', 'state,HOMETOWN'])
+duke = duke.fillna(0)
+print(duke.isna().sum())
+X = duke.drop(columns=['team', 'player name','year', 'Win%'])
+X["CLASS"].value_counts()
+X["position"].value_counts()
+
+cleanup_nums = {"CLASS":{"FR": 1, "SO": 2, "SR": 4, "JR": 3},
+                "position": {"G":1 , "F": 2, "C": 3 }}
+X.replace(cleanup_nums, inplace=True)
+X.head()
+
+X = X.drop(columns=['HT', 'WT (lb)'])
+X = X.drop(columns=['G', 'GS','MP '])
+pd.set_option('display.max_columns', None)
+X
+
+###K-means Clustering
+from sklearn.cluster import KMeans
+from sklearn.decomposition import FactorAnalysis
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+from plotnine import *
+
+# Loop over several values of K
+objective = []
+for k in range(1,10):
+    kmeans = KMeans(n_clusters=k, random_state=0).fit(X)
+    objective.append(kmeans.inertia_)
+   
+kmeans_objectives = pd.DataFrame({'K': range(1,10), 'objective': objective})
+
+# plot the results; what K is best?
+(ggplot(kmeans_objectives)     # defining what data to use
+ + aes(x='K', y='objective')   # map variables to attributes
+ + geom_point() + geom_line()  # defining the type of geometric objects to use
+ + theme_bw()                  # other aestheic attributes
+)
+
+# How do we fit K-means?
+kmeans = KMeans(n_clusters=2, random_state=0).fit(X)
+
+kmeans.labels_
+kmeans.cluster_centers_
+
+# Define a helper function to sort attibutes
+def sorted_attr(idx, cluster_centers, column_names):
+    print("*** Sorted attributes for %d ***" % idx)
+    for i in sorted(range(len(column_names)), key=lambda i: -cluster_centers[idx,i]):
+        print(column_names[i], cluster_centers[idx,i])
+        
+sorted_attr(0, kmeans.cluster_centers_, X.columns)
+sorted_attr(1, kmeans.cluster_centers_, X.columns)
+
+# append the clusters to the data
+clustered_data = duke.join(pd.DataFrame({'cluster': kmeans.labels_}))
+clustered_data
+
+#clustered_data['teamyearwin'] = clustered_data[['team','year', 'Win%']].apply(lambda x:''.join(x), axis=1)
+clustered_data['teamyearwin'] = clustered_data['team'].map(str) + "-"+ clustered_data['year'].map(str) + "-" +clustered_data['Win%'].map(str)
+clustered_data
+
+X
+pd.crosstab(clustered_data['teamyearwin'], clustered_data.cluster)
+
+pd.set_option('display.max_columns', 500)
+pd.crosstab(clustered_data.cluster,[clustered_data.CLASS, clustered_data.position])   
+
+
+### PCA factor Analysis
+def sorted_attr(idx, cluster_centers, column_names):
+    print("*** Sorted attributes for %d ***" % idx)
+    for i in sorted(range(len(column_names)), key=lambda i: -cluster_centers[idx,i]):
+        print(column_names[i], cluster_centers[idx,i])
+        
+transformer = FactorAnalysis(n_components=2, random_state=0)
+X_transformed = transformer.fit_transform(X)
+transformer.components_
+
+sorted_attr(0, transformer.components_, X.columns)
+sorted_attr(1, transformer.components_, X.columns)
+
+from sklearn.decomposition import PCA
+X_standardized = StandardScaler().fit_transform(X)
+X_standardized = pd.DataFrame(X_standardized, columns = X.columns.values)
+pca = PCA().fit(X_standardized)
+scree_data = pd.DataFrame({'eigenvalues': pca.explained_variance_, 
+                           'component': range(len(pca.explained_variance_))})
+
+
+X_standardized
+scree_data['eigenvalues'].plot()
+X_pca = pca.transform(X_standardized)
+plt.scatter(X_pca[:, 0], X_pca[:, 1], alpha=0.8)
+
+objective = []
+for k in range(1,10):
+    kmeans = KMeans(n_clusters=k, random_state=0).fit(X_pca)
+    objective.append(kmeans.inertia_)
+
+kmeans_objectives = pd.DataFrame({'K': range(1,10), 'objective': objective})
+
+kmeans_objectives.plot(x = "K", y = "objective", style = "-o")
+plt.title("K-Means Objective Function by K Size");
+
+kmeans = KMeans(n_clusters=2, random_state=0).fit(X)
+kmeans.fit(X_pca)
+y_kmeans = kmeans.predict(X_pca)
+
+kmeans.labels_
+
+sorted_attr(0, kmeans.cluster_centers_, X.columns)
+sorted_attr(1, kmeans.cluster_centers_, X.columns)
+X_clustered_data = duke.join(pd.DataFrame({'cluster': kmeans.labels_}))
+X_clustered_data
+
+X_clustered_data['teamyearwin'] = X_clustered_data['team'].map(str) + "-"+ X_clustered_data['year'].map(str) + "-" +X_clustered_data['Win%'].map(str)
+X_clustered_data
+
+X_pca
+
+plt.scatter(X_pca[:, 0], X_pca[:, 1], c=y_kmeans, s=(np.array(X_clustered_data['Win%'])+2)**4, cmap='viridis')
+
+centers = kmeans.cluster_centers_
+plt.scatter(centers[:, 0], centers[:, 1], c='black', s=200, alpha=0.5)
+plt.suptitle("Clustering of PCA Components 1 & 2")
+plt.title("Clustering Size")
+plt.xlabel("PCA 1")
+plt.ylabel("PCA 2");
+
+pd.crosstab(X_clustered_data['teamyearwin'], X_clustered_data.cluster)
+
+pd.set_option('display.max_columns', 500)
+pd.crosstab(X_clustered_data.cluster,[X_clustered_data.CLASS, X_clustered_data.position])   
+
+
+# We then did similar k-means and PCA clustering analysis on UNC players and Uconn players for strategy comparison.
